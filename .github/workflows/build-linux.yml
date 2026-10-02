@@ -40,6 +40,15 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
 
+      # electron-builder's fpm shells out to `bsdtar` to write the .MTREE file
+      # for the pacman target. bsdtar comes from libarchive-tools, which the
+      # ubuntu-latest image does not ship, so the pacman step dies with exit
+      # code 127 (command not found) after AppImage/deb/rpm already succeeded.
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libarchive-tools
+
       # --frozen-lockfile keeps the three patchedDependencies entries
       # (@ai-sdk/openai-compatible, @ai-sdk/anthropic, @arms/rum-electron)
       # consistent with pnpm-lock.yaml. Without it a patch can silently fail to
