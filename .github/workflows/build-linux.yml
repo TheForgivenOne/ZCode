@@ -1,0 +1,73 @@
+name: build-linux
+
+# Manual trigger only. Deliberately does NOT run on tag pushes: upstream tags
+# (v3.14.3 etc.) are published by Z.ai's own release pipeline, and building on
+# them here would be noise.
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: Target CPU architecture
+        type: choice
+        options:
+          - x64
+          - arm64
+        default: x64
+
+concurrency:
+  group: build-linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: bundle ${{ inputs.arch || 'x64' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Reads "packageManager": "pnpm@10.33.2" from the repo root package.json.
+      # Do not pin a version here as well; the two would drift.
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          # .nvmrc pins Node 24. The repo's engines field wants >=24 and mise
+          # pins 24.14.0. Running 25 breaks native builds (node-pty, cpu-features).
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # --frozen-lockfile keeps the three patchedDependencies entries
+      # (@ai-sdk/openai-compatible, @ai-sdk/anthropic, @arms/rum-electron)
+      # consistent with pnpm-lock.yaml. Without it a patch can silently fail to
+      # apply and you get a build that differs from upstream.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # bundle.mjs maps --os linux to electron-builder's --linux flag and expects
+      # .AppImage / .deb / .rpm / .pkg.tar.zst artifacts. AppImage needs
+      # FUSE to run but builds fine without it.
+      - name: Build Linux bundle
+        run: pnpm bundle:desktop -- linux ${{ inputs.arch || 'x64' }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: zcode-linux-${{ inputs.arch || 'x64' }}
+          path: packages/desktop/dist/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Summarize artifacts
+        run: |
+          echo "### Artifacts" >> "$GITHUB_STEP_SUMMARY"
+          find packages/desktop/dist -maxdepth 1 \
+            -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name '*.pkg.tar.zst' \) \
+            -printf '%f  %s bytes\n' 2>/dev/null \
+            | while read -r name size; do
+                printf -- '- `%s` (%s)\n' "$name" "$size" >> "$GITHUB_STEP_SUMMARY"
+              done
+          echo "" >> "$GITHUB_STEP_SUMMARY"
